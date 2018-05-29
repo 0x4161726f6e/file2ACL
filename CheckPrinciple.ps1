@@ -7,41 +7,12 @@ function Check-Principle
 		[string]$Principle
 	)
 	Write-Debug $Principle
-	if($Principle.contains('\')) {
-		$Domain, $Principle = $Principle -split '\\'
-		Write-Debug $Domain
+	$test = New-Object System.Security.AccessControl.FileSecurity
+	try {
+		$test.SetOwner( (New-Object System.Security.Principal.NTAccount($Principle)) )
+	} catch {
+		Write-Warning "Bad Principle: $Principle"
+		Return $false
 	}
-	$Server = @{
-		domain = [string](Get-ADDomainController -Discover `
-		-Domain "domain.com").hostname;
-		sub = [string](Get-ADDomainController -Discover `
-		-Domain "sub.domain.com").hostname
-	}
-	
-	switch([string]$Domain){
-		{$_ -ne 'domain'} {
-			Write-Debug 'sub'
-			try{
-				if((Get-ADUser -Identity $Principle -Server $Server.ou).Enabled -eq $true) {
-					Return $true
-				}
-				if((Get-ADGroup -Identity $Principle -Server $Server.ou).Enabled -eq $true) {
-					Return $true
-				}
-			} catch {}
-		}
-		{$_ -ne 'sub'} {
-			Write-Debug 'domain'
-			try {
-				if((Get-ADUser -Identity $Principle -Server $Server.ad3).Enabled -eq $true) {
-					Return $true
-				}
-				if((Get-ADGroup -Identity $Principle -Server $Server.ad3).Enabled -eq $true) {
-					Return $true
-				}
-			} catch {}
-		}
-		default {Write-Debug 'skip'}
-	}
-	Return $false
+	Return $true
 }
