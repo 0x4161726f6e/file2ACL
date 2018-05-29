@@ -44,7 +44,8 @@ Compare		Compare ACLs listed in the provided file to the ACLs that exist at the
 
 <#     >>>>>-----     Check-Principle function     -----<<<<<
 #>
-. .\CheckPrinciple.ps1}
+if((Get-ExecutionPolicy) -eq 'Unrestricted') {. .\MBP-CheckPrinciple.ps1}
+else {. \\MBP-TrueNAS.MouseBiology.org\toolbox\PowerShell\MBP-CheckPrinciple.ps1}
 
 
 <#     >>>>>-----     Save-XML function     -----<<<<<
@@ -63,6 +64,12 @@ function Save-XML
 		[Switch]$IsRoot = $false
 	)
 	
+	if( (-not (Check-Principle $xmlACL.Owner)) `
+			-or (-not (Check-Principle $xmlACL.Group)) ) {
+		Write-Warning "Invalid owner or group: the access control list wasn't saved for $($ACL.Path)"
+		Return
+	}
+	
 	if ($IsRoot) {$xmlWriter.WriteStartElement('RootPath')}
 	else {$xmlWriter.WriteStartElement('SubPath')}
 	
@@ -74,7 +81,10 @@ function Save-XML
 	
 	ForEach ($ace in $ACL.Access){
 		# Ignore Inherited ACEs unless at "root" folder
-		if (($ace.IsInherited -eq $false) -or $IsRoot) {
+		if(-not (Check-Principle $ace.IdentityReference)) {
+			Write-Warning "Invalid identity referense: an access control entry wasn't saved for $($ACL.Path)"
+		}
+		elseif(($ace.IsInherited -eq $false) -or $IsRoot) {
 			$xmlWriter.WriteStartElement('AccessControlEntry')
 			$xmlWriter.WriteAttributeString('IsInherited', $ace.IsInherited)
 			$xmlWriter.WriteElementString('Description', 'ACE collected from raw ACL')
@@ -144,14 +154,15 @@ function Check-XML
 		[Switch]$IsRoot = $false#>
 	)
 	Write-Debug $xmlACL
-	
-	if(-not (Check-Principle $xmlACL.Owner)) {Return $false}
-	if(-not (Check-Principle $xmlACL.Group)) {Return $false}
+	$BadPrinciple = 0
+	if(-not (Check-Principle $xmlACL.Owner)) {$BadPrinciple++}
+	if(-not (Check-Principle $xmlACL.Group)) {$BadPrinciple++}
 	ForEach ($ace in ($xmlACL.AccessControlEntry |`
 				Where-Object IsInherited -eq $false)) {
-		if(-not (Check-Principle $ace.IdentityReference)) {Return $false}
+		if(-not (Check-Principle $ace.IdentityReference)) {$BadPrinciple++}
 	}
-	Return $true
+	if($BadPrinciple -gt 0) {return $false}
+	else {Return $true}
 }
 
 
@@ -300,12 +311,12 @@ $SetACL = {
 	try {
 		$rawACEs = (Get-ACL -LiteralPath $Path).Access | where{$_.IsInherited -eq $false}
 	} catch [System.UnauthorizedAccessException] {
-		throw "Unable to Access raw ACL. File/Folder access denied"
+		throw "Unable to Access raw ACL at $Path. File/Folder access denied"
 	}
 	$Result = Compare-ACE $readACL.Access $rawACEs -Diff
 	if($Result[-1] -eq $false){
 		Set-ACL -LiteralPath $Path -AclObject $readACL
-		Write-Verbose ("Differences between file and raw ACL:" `
+		Write-Verbose ("Differences between file and raw ACL at $Path :" `
 						+ $Result[0..($Result.Count-2)])
 	} elseif($WriteAll) {
 		Set-ACL -LiteralPath $Path -AclObject $readACL
@@ -443,7 +454,7 @@ Switch ([string]$Verb){
 		$xmlWriter.Close()
 		$xmlWriter.Dispose()
 	}
-	{'set','compare' -contains $_} {
+	{'set','compare','check' -contains $_} {
 		try {		# Check is file exists and get rooted path
 			$File = Get-Item -LiteralPath $File
 			Write-Debug "Get-Item result: $File"
@@ -456,8 +467,26 @@ Switch ([string]$Verb){
 			$xmlRead.Load($File)
 			Write-Debug "Config file loaded for $($xmlRead.rootpath.path)"		# debug output
 		} catch {throw "Unable to load config file."}
+		
+		<#   >>>---   Check file   ---<<<
+		check for invalid users and groups
+		#>
+		$PrincipleErrorCount = 0
+		if(-not (Check-XML $xmlRead.rootpath.AccessControlList)) {
+			Write-Warning "Bad user or group for $($xmlRead.rootpath.path)`r`n`r`n"#in $File"
+			$PrincipleErrorCount++
+		}
+		ForEach ($subpath in $xmlRead.rootpath.subpath){
+			if(-not (Check-XML $subpath.AccessControlList)) {
+				Write-Warning "Bad user or group for $($subpath.path)`r`n`r`n"#in $File"
+				$PrincipleErrorCount++
+			}
+		}
 	}
 	'set' {
+		if($PrincipleErrorCount -gt 0) {
+			throw "Unable to set: Config file contains $PrincipleErrorCount principle errors."
+		}
 		$readACL = Read-XML $xmlRead.rootpath.AccessControlList `
 							($xmlRead.rootpath.IsFolder -eq "True")
 		& $SetACL $readACL $xmlRead.rootpath.path $WriteAll $Replace
@@ -471,11 +500,11 @@ Switch ([string]$Verb){
 			$readACL = Read-XML $subpath.AccessControlList ($subpath.IsFolder -eq "True")
 			& $SetACL $readACL $subpath.path $WriteAll $Replace
 		}
-		
-		#$xmlRead.Close()
-		#$xmlRead.Dispose()
 	}
 	'compare' {
+		<#if($PrincipleErrorCount -gt 0) {
+			throw "Unable to compare: Config file contains $PrincipleErrorCount principle errors."
+		}#>
 		Write-Output "" $xmlRead.rootpath.path
 		$xmlACEs = (Read-XML $xmlRead.rootpath.AccessControlList ($xmlRead.rootpath.IsFolder -eq "True")).Access
 		try {
