@@ -44,8 +44,7 @@ Compare		Compare ACLs listed in the provided file to the ACLs that exist at the
 
 <#     >>>>>-----     Check-Principle function     -----<<<<<
 #>
-if((Get-ExecutionPolicy) -eq 'Unrestricted') {. .\MBP-CheckPrinciple.ps1}
-else {. \\MBP-TrueNAS.MouseBiology.org\toolbox\PowerShell\MBP-CheckPrinciple.ps1}
+. .\MBP-CheckPrinciple.ps1}
 
 
 <#     >>>>>-----     Save-XML function     -----<<<<<
@@ -147,11 +146,7 @@ function Check-XML
 {
 	Param(
 		[parameter(Mandatory=$true, Position=0)]
-		[System.Xml.XmlElement]$xmlACL<#,
-		[parameter(Mandatory=$false, Position=1)]
-		[Boolean]$IsFolder,
-		[parameter(Mandatory=$false)]
-		[Switch]$IsRoot = $false#>
+		[System.Xml.XmlElement]$xmlACL
 	)
 	Write-Debug $xmlACL
 	$BadPrinciple = 0
@@ -212,12 +207,19 @@ function Compare-ACE
 		[parameter(Mandatory=$False)]
 		[switch]$Diff=$false
 	)
-	if(($AccessLeft.GetType().name -ne 'FileSystemAccessRule') -and`
+	if(($AccessLeft -eq $null) -and ($AccessRight -eq $null)) {
+		Write-Error "No point in comparing two null valued ACE lists."
+		Return $false
+	} elseif(($AccessLeft -eq $null) -or ($AccessRight -eq $null)) {
+		Write-Output (Format-SideBySide $AccessLeft $AccessRight)
+		Return $false
+	}
+	if(($AccessLeft.GetType().name -ne 'FileSystemAccessRule') -and `
 			($AccessLeft.GetType().name -ne 'AuthorizationRuleCollection')) {
 		Write-Error "Function: Compare-ACE `r`nError: AccessLeft is not of an allowed data type"
 		Return $false
 	}
-	if(($AccessRight.GetType().name -ne 'FileSystemAccessRule') -and`
+	if(($AccessRight.GetType().name -ne 'FileSystemAccessRule') -and `
 			($AccessRight.GetType().name -ne 'AuthorizationRuleCollection')) {
 		Write-Error "Function: Compare-ACE `r`nError: AccessRight is not of an allowed data type"
 		Return $false
@@ -279,7 +281,6 @@ $EnqueueTree = {
 				ForEach ($Item in (Get-ChildItem -LiteralPath `
 								($ACL.Path -split '::')[1])) {
 					$PathQueue.Enqueue( ($Item.PSPath -split '::')[1] )
-					#Write-Output ($Item.PSPath -split '::')[1] #>> pathLog.txt
 				}
 			}
 			if (($ACL.Access.IsInherited -contains $false) -or $IsRoot) {
@@ -316,8 +317,8 @@ $SetACL = {
 	$Result = Compare-ACE $readACL.Access $rawACEs -Diff
 	if($Result[-1] -eq $false){
 		Set-ACL -LiteralPath $Path -AclObject $readACL
-		Write-Verbose ("Differences between file and raw ACL at $Path :" `
-						+ $Result[0..($Result.Count-2)])
+		Write-Verbose "Differences between file and raw ACL (Left = file Right = raw):"
+		$Result[0..($Result.Count-2)] | Out-String -stream | Write-verbose
 	} elseif($WriteAll) {
 		Set-ACL -LiteralPath $Path -AclObject $readACL
 	}
@@ -515,7 +516,8 @@ Switch ([string]$Verb){
 		$Result = Compare-ACE $xmlACEs $rawACEs -Diff
 		Write-Output ('Raw ACL matchs file: ' + $Result[-1])
 		if($Result[-1] -eq $false){
-			Write-Output "Differences between file and raw ACL:" $Result[0..($Result.Count-2)]
+			Write-Output "Differences between file and raw ACL (Left = file Right = raw):"
+			$Result[0..($Result.Count-2)] | Out-String -stream | Write-Output
 		}
 		
 		ForEach ($subpath in $xmlRead.rootpath.subpath){
@@ -530,7 +532,8 @@ Switch ([string]$Verb){
 			$Result = Compare-ACE $xmlACEs $rawACEs -Diff
 			Write-Output ('Raw ACL matchs file: ' + $Result[-1])
 			if($Result[-1] -eq $false){
-				Write-Output "Differences between file and raw ACL:" $Result[0..($Result.Count-2)]
+				Write-Output "Differences between file and raw ACL (Left = file Right = raw):"
+				$Result[0..($Result.Count-2)] | Out-String -stream | Write-Output
 			}
 		}
 		Write-Output "" "Files and folders NOT listed in the config file were NOT checked for explicite ACEs"
