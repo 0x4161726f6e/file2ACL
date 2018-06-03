@@ -15,14 +15,14 @@ Param(
 )
 
 $Help ='
-     >>>>>-----     MBP-ManageACL     -----<<<<<
+     >>>>>-----     File2ACL     -----<<<<<
 
 ManageACL is a tool that allows for the documentation and management of file and
 folder ACLs via an XML file.
 
 USAGE
-.\MBP-ManageACL.ps1 Save <XML File> <Start/Root Path>
-.\MBP-ManageACL.ps1 [Set|Compare] <XML File>
+.\File2ACL.ps1 Save <XML File> <Start/Root Path>
+.\File2ACL.ps1 [Set|Compare] <XML File>
 _____
 Save		Save all ACLs starting from the given path.
 
@@ -370,7 +370,7 @@ Switch ([string]$Verb){
 		$KillSwitch = for($i=0; $i -lt $MaxThread; $i++){$true}
 		
 		$PathQueue.Enqueue($Path)
-		Write-output ("`r`n`r`nMBP-ManageACL Save Started " +`
+		Write-output ("`r`n`r`nFile2ACL Save Started " +`
 						(get-date -Format 'dddd, MMMM dd, yyyy HH:mm:ss') +`
 						' on:') $Path "`r`n"
 		Write-Debug ("Verb: save `r`nXML file path: " + $File)
@@ -446,7 +446,7 @@ Switch ([string]$Verb){
 
 		$RunspacePool.Close() 
 		$RunspacePool.Dispose()
-		Write-output ('MBP-ManageACL Save Ended ' +`
+		Write-output ('File2ACL Save Ended ' +`
 					(get-date -Format 'dddd, MMMM dd, yyyy HH:mm:ss')`
 					+ ' on:') $Path
 		$xmlWriter.WriteEndElement()
