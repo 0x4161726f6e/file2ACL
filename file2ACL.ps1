@@ -44,7 +44,7 @@ Compare		Compare ACLs listed in the provided file to the ACLs that exist at the
 
 <#     >>>>>-----     Check-Principle function     -----<<<<<
 #>
-. .\MBP-CheckPrinciple.ps1}
+. .\CheckPrinciple.ps1
 
 
 <#     >>>>>-----     Save-XML function     -----<<<<<
@@ -63,8 +63,8 @@ function Save-XML
 		[Switch]$IsRoot = $false
 	)
 	
-	if( (-not (Check-Principle $xmlACL.Owner)) `
-			-or (-not (Check-Principle $xmlACL.Group)) ) {
+	if( (-not (Check-Principle $ACL.Owner)) `
+			-or (-not (Check-Principle $ACL.Group)) ) {
 		Write-Warning "Invalid owner or group: the access control list wasn't saved for $($ACL.Path)"
 		Return
 	}
@@ -333,14 +333,55 @@ $SetACL = {
 <#     >>>>>-----     Script Body     -----<<<<<
 #>
 Switch ([string]$Verb){
-	'save' {
+	{'set','compare','check','update' -contains $_} {
+		<#   >>>---   Load config file   ---<<<
+		#>
+		try {		# Check is file exists and get rooted path
+			[System.IO.FileInfo]$File = (Get-Item -LiteralPath $File)
+			Write-Debug "Get-Item result: $($File.PSPath)"
+			if($File.PSIsContainer) {
+				throw "File path provied refers to a directory."
+			}
+		} catch {throw "Config file not found"}
+		$File = ($File.PSPath -split '::')[1]
+		[string]$File = "\\?\" + ($File -replace "^\\\\", "UNC\")
+		Write-Debug "file path string: $File"
+		try {		# load config file into an XML object
+			$xmlRead = New-Object -TypeName XML
+			$xmlRead.LoadXml( (Get-Content -LiteralPath $File) )
+			Write-Debug "Config file loaded for $($xmlRead.rootpath.path) from $File"		# debug output
+		} catch {throw "Unable to load config file."}
+	}
+	'update' {		# Pull path from config file
+		$Path = $xmlRead.rootpath.path
+		Move-Item $File "$File replaced $(Get-Date -format 'yyyy-MM-dd_HH.mm').xml"
+	}
+	{'set','compare','check' -contains $_} {
+		<#   >>>---   Check file   ---<<<
+		check for invalid users and groups
+		#>
+		$PrincipleErrorCount = 0
+		if(-not (Check-XML $xmlRead.rootpath.AccessControlList)) {
+			Write-Warning "Bad user or group for $($xmlRead.rootpath.path)`r`n`r`n"#in $File"
+			$PrincipleErrorCount++
+		}
+		ForEach ($subpath in $xmlRead.rootpath.subpath){
+			if(-not (Check-XML $subpath.AccessControlList)) {
+				Write-Warning "Bad user or group for $($subpath.path)`r`n`r`n"#in $File"
+				$PrincipleErrorCount++
+			}
+		}
+	}
+	{'save','update' -contains $_} {
 		try {		# if processing path isn't give assume current working directory
 			if ($Path -eq '') {$Path = (get-item -LiteralPath (Get-Location)).PSpath}
 			else {$Path = (Get-Item -LiteralPath $Path).PSPath}		# ensure path is valid
 		} catch {throw "Invalid path provided"}
 		# Correct Path for long paths
 		$Path = ($Path -split '::')[1]
-		$Path = "\\?\" + ($Path -replace "^\\\\", "UNC\")
+		if( -not $Path.Contains('\\?\')) {
+			$Path = "\\?\" + ($Path -replace "^\\\\", "UNC\")
+		}
 		
 		# To correct for execution path vs working path differences
 		# if path is not a full path assume path is relative to working directory
@@ -349,7 +390,9 @@ Switch ([string]$Verb){
 		} elseif (-not [System.IO.Path]::IsPathRooted($File)) {
 			$File = [System.IO.Path]::GetFullPath( (Join-Path (Get-Location) $File) )
 		}
-		$File = "\\?\" + ($File -replace "^\\\\", "UNC\")
+		if( -not $File.Contains('\\?\')) {
+			$File = "\\?\" + ($File -replace "^\\\\", "UNC\")
+		}
 		
 		try {		# setup XML writing
 			$xmlWriter = New-Object System.XML.XmlTextWriter($File,$Null)
@@ -370,11 +413,10 @@ Switch ([string]$Verb){
 		$KillSwitch = for($i=0; $i -lt $MaxThread; $i++){$true}
 		
 		$PathQueue.Enqueue($Path)
-		Write-output ("`r`n`r`nFile2ACL Save Started " +`
-						(get-date -Format 'dddd, MMMM dd, yyyy HH:mm:ss') +`
-						' on:') $Path "`r`n"
-		Write-Debug ("Verb: save `r`nXML file path: " + $File)
-		Write-Debug ("Verb: save `r`nRootPath: " + $Path)
+		Write-output "`r`n`r`nFile2ACL Save Started $(get-date -Format 'dddd, MMMM dd, yyyy HH:mm:ss') on:" `
+				$Path "`r`n"
+		Write-Debug "Verb: save `r`nXML file path: $File"
+		Write-Debug "Verb: save `r`nRootPath: $Path"
 		
 		# call script block "Enqueue-Tree" to add initial path values to path queue
 		& $EnqueueTree -IsRoot
@@ -428,8 +470,7 @@ Switch ([string]$Verb){
 		do{		# Write ACL to XML file if there are ACLs queued
 			if ($aclQueue.TryDequeue([ref]$aclHold)){
 				Save-XML $aclHold.ACL $xmlWriter $aclHold.IsFolder
-				Write-output ((get-date -Format HH:mm:ss) +`
-							' - Unless error above, ACL Saved for:')`
+				Write-output "$(get-date -Format HH:mm:ss) - Unless error above, ACL Saved for:" `
 							($aclHold.ACL.Path -split '::')[1]
 			}
 			# wait half a second before checking ACL queue again
@@ -446,43 +487,12 @@ Switch ([string]$Verb){
 
 		$RunspacePool.Close() 
 		$RunspacePool.Dispose()
-		Write-output ('File2ACL Save Ended ' +`
-					(get-date -Format 'dddd, MMMM dd, yyyy HH:mm:ss')`
-					+ ' on:') $Path
+		Write-output "`r`nFile2ACL Save Ended $(get-date -Format 'dddd, MMMM dd, yyyy HH:mm:ss') on: " $Path
 		$xmlWriter.WriteEndElement()
 		$xmlWriter.WriteEndDocument()
 		$xmlWriter.Flush()
 		$xmlWriter.Close()
 		$xmlWriter.Dispose()
-	}
-	{'set','compare','check' -contains $_} {
-		try {		# Check is file exists and get rooted path
-			$File = Get-Item -LiteralPath $File
-			Write-Debug "Get-Item result: $File"
-			if($File.PSIsContainer) {
-				throw "File path provied refers to a directory."
-			}
-		} catch {throw "Config file not found"}
-		try {		# load config file into an XML object
-			$xmlRead = New-Object -TypeName XML
-			$xmlRead.Load($File)
-			Write-Debug "Config file loaded for $($xmlRead.rootpath.path)"		# debug output
-		} catch {throw "Unable to load config file."}
-		
-		<#   >>>---   Check file   ---<<<
-		check for invalid users and groups
-		#>
-		$PrincipleErrorCount = 0
-		if(-not (Check-XML $xmlRead.rootpath.AccessControlList)) {
-			Write-Warning "Bad user or group for $($xmlRead.rootpath.path)`r`n`r`n"#in $File"
-			$PrincipleErrorCount++
-		}
-		ForEach ($subpath in $xmlRead.rootpath.subpath){
-			if(-not (Check-XML $subpath.AccessControlList)) {
-				Write-Warning "Bad user or group for $($subpath.path)`r`n`r`n"#in $File"
-				$PrincipleErrorCount++
-			}
-		}
 	}
 	'set' {
 		if($PrincipleErrorCount -gt 0) {
