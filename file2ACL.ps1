@@ -512,7 +512,7 @@ Switch ([string]$Verb){
 		$MaxDepth = [regex]::Matches( `
 				($xmlRead.RootPath.SubPath | Sort-Object -Property {$_.Path.Length})[-1].Path, "\\").count
 		#>
-		ForEach ($subpath in $xmlRead.rootpath.subpath){
+		ForEach ($subpath in ($xmlRead.RootPath.SubPath | Sort-Object -Property {$_.Path.Length})){
 			$readACL = Read-XML $subpath.AccessControlList ($subpath.IsFolder -eq "True")
 			& $SetACL $readACL $subpath.path $WriteAll $Replace
 		}
