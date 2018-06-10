@@ -340,15 +340,15 @@ Switch ([string]$Verb){
 	{'set','compare','check','update' -contains $_} {
 		<#   >>>---   Load config file   ---<<<
 		#>
-		try {		# Check is file exists and get rooted path
-			[System.IO.FileInfo]$File = (Get-Item -LiteralPath $File)
-			Write-Debug "Get-Item result: $($File.PSPath)"
-			if($File.PSIsContainer) {
-				throw "File path provied refers to a directory."
-			}
-		} catch {throw "Config file not found"}
-		$File = ($File.PSPath -split '::')[1]
-		[string]$File = "\\?\" + ($File -replace "^\\\\", "UNC\")
+		if(-not (Test-Path -LiteralPath $File)) {
+			throw "Config file not found"
+		} elseif(Test-Path -LiteralPath $File -PathType Container) {
+			throw "File path provied refers to a directory."
+		}
+		$File = Convert-Path -LiteralPath $File
+		if( -not $File.Contains('\\?\')) {
+			$File = "\\?\" + ($File -replace "^\\\\", "UNC\")
+		}
 		Write-Debug "file path string: $File"
 		try {		# load config file into an XML object
 			$xmlRead = New-Object -TypeName XML
@@ -559,6 +559,9 @@ Switch ([string]$Verb){
 
 
 <#   >>>---   Notes   ---<<<
+
+Test-Path -LiteralPath .\test.xml -PathType Leaf
+
 icacls /reset /t /c /l
 ForEach($sid in $acl.Access.identityreference) {$acl.PurgeAccessRules($sid)}
 $xml.RootPath.SubPath | Sort-Object -Property {$_.Path.Length}
