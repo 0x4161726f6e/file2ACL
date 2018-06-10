@@ -377,12 +377,13 @@ Switch ([string]$Verb){
 		}
 	}
 	{'save','update' -contains $_} {
-		try {		# if processing path isn't give assume current working directory
-			if ($Path -eq '') {$Path = (get-item -LiteralPath (Get-Location)).PSpath}
-			else {$Path = (Get-Item -LiteralPath $Path).PSPath}		# ensure path is valid
-		} catch {throw "Invalid path provided"}
+		if ($Path -eq '') {
+			$Path = (get-item -LiteralPath (Get-Location)).PSpath
+		}
+		if(Test-Path -LiteralPath $Path -PathType Container) {
+			$Path = Convert-Path -LiteralPath $Path
+		} else {throw "Invalid path provided"}
 		# Correct Path for long paths
-		$Path = ($Path -split '::')[1]
 		if( -not $Path.Contains('\\?\')) {
 			$Path = "\\?\" + ($Path -replace "^\\\\", "UNC\")
 		}
@@ -391,7 +392,7 @@ Switch ([string]$Verb){
 		# if path is not a full path assume path is relative to working directory
 		if(Test-Path -LiteralPath $File) {
 			throw "File alread exists or is a directory. Please use 'update'."
-		} elseif (-not [System.IO.Path]::IsPathRooted($File)) {
+		} elseif(-not [System.IO.Path]::IsPathRooted($File)) {
 			$File = [System.IO.Path]::GetFullPath( (Join-Path (Get-Location) $File) )
 		}
 		if( -not $File.Contains('\\?\')) {
