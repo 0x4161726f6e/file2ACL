@@ -9,9 +9,9 @@ function Check-Principle
 	Write-Debug $Principle
 	$test = New-Object System.Security.AccessControl.FileSecurity
 	try {
-		$test.SetOwner( (New-Object System.Security.Principal.NTAccount($Principle)) )
+		$test.SetOwner( (New-Object System.Security.Principal.NTAccount("$Principle")) )
 	} catch {
-		Write-Warning "Bad Principle: $Principle"
+		Write-Verbose "Unable to resolve Principle: $Principle"
 		Return $false
 	}
 	Return $true
