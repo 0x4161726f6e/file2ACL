@@ -22,9 +22,11 @@ folder ACLs via an XML file.
 
 USAGE
 .\File2ACL.ps1 Save <XML File> <Start/Root Path>
-.\File2ACL.ps1 [Set|Compare] <XML File>
+.\File2ACL.ps1 [Set|Compare|Check|Update] <XML File>
 _____
 Save		Save all ACLs starting from the given path.
+
+Update		Save current XML file as a backup and Write a new XML file.
 
 -MaxThread	Set the number threads to be used when saving ACLs to file.
 		Default=3
@@ -39,6 +41,8 @@ Set		Set all ACLs listed in the provided file starting at the root path in the
 _____
 Compare		Compare ACLs listed in the provided file to the ACLs that exist at the
 		paths listed in the file.
+
+Check		Check XML file for "security principles" that are invalid
 '
 
 
@@ -550,8 +554,6 @@ Switch ([string]$Verb){
 	}
 	default {
 		Write-Output $Help
-		cmd /c pause
-		Exit
 	}
 }
 
