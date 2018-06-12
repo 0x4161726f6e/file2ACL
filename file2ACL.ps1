@@ -507,15 +507,24 @@ Switch ([string]$Verb){
 							($xmlRead.rootpath.IsFolder -eq "True")
 		& $SetACL $readACL $xmlRead.rootpath.path $WriteAll $Replace
         
-		<# for multi threading control
+		# for multi threading control
 		$TreeDepth = [regex]::Matches($xmlRead.RootPath.Path, "\\").count
 		$MaxDepth = [regex]::Matches( `
 				($xmlRead.RootPath.SubPath | Sort-Object -Property {$_.Path.Length})[-1].Path, "\\").count
-		#>
-		ForEach ($subpath in $xmlRead.rootpath.subpath){
+		# multi thread logic mostly here
+		for($i=$TreeDepth; $i -lt $MaxDepth; $i++) {
+			ForEach ($subpath in $xmlRead.RootPath.SubPath) {
+				if([regex]::Matches($subpath.Path, "\\").count -eq $i) {
+					$readACL = Read-XML $subpath.AccessControlList ($subpath.IsFolder -eq "True")
+					& $SetACL $readACL $subpath.path $WriteAll $Replace
+				}
+			}
+		}
+		<# Purely sing thread method
+		ForEach ($subpath in ($xmlRead.RootPath.SubPath | Sort-Object -Property {$_.Path.Length})){
 			$readACL = Read-XML $subpath.AccessControlList ($subpath.IsFolder -eq "True")
 			& $SetACL $readACL $subpath.path $WriteAll $Replace
-		}
+		}#>
 	}
 	'compare' {
 		<#if($PrincipleErrorCount -gt 0) {
