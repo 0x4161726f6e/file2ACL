@@ -4,7 +4,7 @@ Param(
 	[Parameter(Position=1)]
 		[string]$File,
 	[Parameter(Position=2)]
-		[string]$Path,
+		[string]$Path = (get-item -LiteralPath (Get-Location)).PSpath,
 	[Parameter()]
 		[int]$MaxThread = 3,
 	[Parameter()]
@@ -175,8 +175,8 @@ function XMLtoICACLS {
 			[System.Xml.XmlElement]$xml
 	)
 	Write-Debug $xml
-	$acl = "/inheritance:e"
-	#$acl += " /setowner `"$($xml.AccessControlList.Owner)`""		# Doesn't seem to work
+	$acl = @("/reset /Q", "/setowner `"$($xml.AccessControlList.Owner)`"")
+	$ACEs += "/inheritance:e"
 	
 	ForEach ($ace in ($xml.AccessControlList.AccessControlEntry |`
 				Where-Object IsInherited -eq $false)) {
@@ -203,7 +203,7 @@ function XMLtoICACLS {
 			'\bTakeOwnership\b' {$Rights += 'WO,'}
 			'\b(ExecuteFile|Traverse)\b' {$Rights += 'X,'}
 		}
-		$Rights = $Rights -replace ".$",""
+		$Rights = $Rights -replace ",$",""
 		$InHeritance = ''
 		Switch -Regex ($ace.InHeritanceFlags) {
 			'\bContainerInherit\b' {$InHeritance += '(CI)'}
@@ -218,9 +218,10 @@ function XMLtoICACLS {
 			'Allow' {$Type = '/grant:r'}
 			'Deny' {$Type = '/deny'}
 		}
-		$acl += " $Type `"$ID`:$InHeritance$Propagation($Rights)`""
+		$ACEs += " $Type `"$ID`:$InHeritance$Propagation($Rights)`""
 	}
-	Return @{ACL=$acl; Path = $xml.Path -replace "\\$",""}
+	$acl += $ACEs
+	Return @{icacls=$acl; Path = $xml.Path -replace "\\$",""}
 }
 
 
@@ -382,44 +383,40 @@ $EnqueueTree = {
 <#     >>>>>-----     SetACL Script Block (function)     -----<<<<<
 #>
 $SetACL = {
-	Param(		# SetACL $readACL.ACL $readACL.Path $WriteAll $Replace
-		<#[parameter(Mandatory=$true, Position=0)]
-			[System.Object]$readACL,
-		[parameter(Mandatory=$true, Position=1)]
-			[string]$Path,#>
+	Param(
 		[parameter(Mandatory=$True, Position=0)]
 			[int]$Index = 0,
 		[parameter(Mandatory=$false, Position=1)]
 			[bool]$Replace = $false
 	)
-	Write-Output "Log for Worker $Index`:"
+	Write-Output "`r`n`r`nLog for Worker $Index`:"
 	# below statement prevents "[ref] cannot be applied to a variable that doesn't exist"
 	$Job = $null
 	do{
 		if($aclQueue.TryDequeue([ref]$Job)) {
 			$Idle[$Index] = $false
-			if( ('DirectorySecurity','FileSecurity') -contains $Job.ACL.GetType().name) {
-				Set-ACL -LiteralPath $Job.Path -AclObject $Job.ACL
-				if(-not $?) {Write-Output "Set-ACL failed on $($Job.Path)"}
-			} elseif($Job.ACL.GetType().name -eq 'String') {
-				Write-Output $Job.Path
-				icacls $Job.Path /reset /C /L *>&1 | Write-Output
-				Write-Output $Job.ACL
-				icacls $Job.Path ($Job.ACL -split ' ') /C /L *>&1 | Write-Output
-				<#
-				foreach($ACE in $Job.ACL) {
-					Write-Output $ACE
-					icacls $Job.Path ($ACE -split ' ') /C /L *>&1 | Write-Output
-				}#>
+			Write-Output "`r`nStarting Job: $($Job.Path)"
+			Write-Output "logic check: $($Job.icacls -eq $null)"
+			if($Job.ACL -ne $null) {
+				Set-ACL -LiteralPath $Job.Path -AclObject $Job.ACL | Write-Output
+				if(-not $?) {
+					Write-Output "Set-ACL failed on $($Job.Path)"
+				}
+			} elseif($Job.icacls -ne $null) {
+				foreach($ParamSet in $job.icacls) {
+					Write-Output "Running: $ParamSet"
+					icacls $Job.Path ($ParamSet -split ' ') /C /L /Q *>&1 | Write-Output
+				}
 			} else {Write-Output "mal-formed ACL object for $($Job.Path)"}
-			if($Replace) {
-				ForEach ($Item in (Get-ChildItem -LiteralPath $Job.Path)) {
-					(icacls $Item /reset /T /C /L /Q) | ForEach {Write-Output $_}
+			if($Replace -and (($Job.icacls -eq $null) -or ($Job.icacls.GetType().name -ne 'String'))) {
+				ForEach ($Item in (Get-ChildItem -LiteralPath $Job.Path).FullName) {
+					$aclQueue.Enqueue( @{icacls='/reset /T /Q'; `
+										Path = ($Item -replace "\\$","")} )
 				}
 			}
 		} else {
 			$Idle[$Index] = $True
-			Start-Sleep -Milliseconds 500
+			Start-Sleep -Milliseconds 50
 		}
 	}While($Idle -contains $false)
 }
@@ -446,12 +443,12 @@ Switch ([string]$Verb){
 			$File = "\\?\" + ($File -replace "^\\\\", "UNC\")
 		}
 		
-		if ($Path -eq '') {
+		if ($null,'',$false,'False' -contains $Path) {
 			$Path = (get-item -LiteralPath (Get-Location)).PSpath
 		}
 		if(Test-Path -LiteralPath $Path -PathType Container) {
 			$Path = Convert-Path -LiteralPath $Path
-		} else {throw "Invalid path provided"}
+		} else {throw "Invalid path provided: $Path :: $((get-item -LiteralPath (Get-Location)).PSpath)"}
 		# Correct Path for long paths
 		if( -not $Path.Contains('\\?\')) {
 			$Path = "\\?\" + ($Path -replace "^\\\\", "UNC\")
