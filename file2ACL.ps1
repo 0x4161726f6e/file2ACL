@@ -1,3 +1,5 @@
+<#			>>>>>-----		Script Parameters     -----<<<<<
+#>
 Param(
 	[Parameter(Position=0)]
 		[string]$Verb,
@@ -14,23 +16,27 @@ Param(
 	[Parameter()]
 		[switch]$icacls,
 	[Parameter()]
+		[switch]$SkipOwner,
+	[Parameter()]
+		[switch]$TakeOwn,
+	[Parameter()]
 		[switch]$SaveAll
 )
 
 
-<#     >>>>>-----     Initial Variables     -----<<<<<
+<#			>>>>>-----		Initial Variables     -----<<<<<
 #>
-$ScriptFolder = ''
 $HelpMSG = . { @'
-     >>>>>-----     file2ACL     -----<<<<<
+     >>>>>-----     File2ACL     -----<<<<<
 
-file2ACL is a tool that allows for the documentation and management of file and
+File2ACL is a tool that allows for the documentation and management of file and
 folder ACLs via an XML file.
 
 USAGE
 .\file2ACL.ps1 Save <XML File> <Start/Root Path> [-SaveAll] [-MaxThread]
 .\file2ACL.ps1 Update <XML File> [-SaveAll] [-MaxThread #]
-.\file2ACL.ps1 Set <XML File> [-WriteAll] [-Replace] [-icacls] [-MaxThread #]
+.\file2ACL.ps1 Set <XML File> [-WriteAll] [-Replace] [-icacls] [-SkipOwner]
+		[-MaxThread #]
 .\file2ACL.ps1 Compare <XML File>
 .\file2ACL.ps1 Check <XML File>
 _____
@@ -59,6 +65,12 @@ Check		Check XML file for "security principles" that are invalid.
 -Replace	Replace child ACLs with inherited ACLs from parents. Only ACLs listed
 		in the provied file will be left.
 
+-SkipOwner	Skip setting ownership on files and folders. Helpful when dealing with
+		Samba using NFS4 ACLs, which can cause set-acl to fail when setting
+		ownership to a user or group the script runner is not a member.
+
+-TakeOwn	Use TakeOwn CMD to take ownership of entire tree.
+
 -icacls		Use icacls.exe instead of Set-ACL. Only needed/recomended for use
 		with Samba implementations that don't work as expected with Set-ACL.
 		Using icacls will not set ownership; broken for domain usage.
@@ -66,12 +78,36 @@ Check		Check XML file for "security principles" that are invalid.
 }
 
 
-<#     >>>>>-----     Check-Principle function     -----<<<<<
+<#			>>>>>-----		Get-RootedPath function     -----<<<<<
+Get the rooted path for a relative path.
 #>
-. .\CheckPrinciple.ps1
+function Get-RootedPath {
+	param(
+		[string]$Path
+	)
+	Return $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Path)
+}
 
 
-<#     >>>>>-----     ACLtoXML function     -----<<<<<
+<#			>>>>>-----		Check-Principle function     -----<<<<<
+#>
+function Check-Principle {
+	Param(
+		[parameter(Mandatory=$true, Position=1)]
+		[string]$Principle
+	)
+	Write-Debug $Principle
+	$test = New-Object System.Security.AccessControl.FileSecurity
+	try {
+		$test.SetOwner( (New-Object System.Security.Principal.NTAccount($Principle)) )
+	} catch {
+		Write-Warning "Bad Principle: $Principle"
+		Return $false
+	}
+	Return $true
+}
+
+<#			>>>>>-----		ACLtoXML function     -----<<<<<
 #>
 function ACLtoXML {
 	Param (
@@ -132,7 +168,7 @@ function ACLtoXML {
 }
 
 
-<#     >>>>>-----     XMLtoACL function     -----<<<<<
+<#			>>>>>-----		XMLtoACL function     -----<<<<<
 #>
 function XMLtoACL {
 	Param(
@@ -141,14 +177,16 @@ function XMLtoACL {
 	)
 	Write-Debug $xml
 	
-	if ($xml.IsFolder) {
+	if($xml.IsFolder) {
 		$acl = New-Object System.Security.AccessControl.DirectorySecurity
 	}
 	else {
 		$acl = New-Object System.Security.AccessControl.FileSecurity
 	}
-	$acl.SetOwner( (New-Object System.Security.Principal.NTAccount($xml.AccessControlList.Owner)) )
-	$acl.SetGroup( (New-Object System.Security.Principal.NTAccount($xml.AccessControlList.Group)) )
+	if(-not $SkipOwner) {
+		$acl.SetOwner( (New-Object System.Security.Principal.NTAccount($xml.AccessControlList.Owner)) )
+		$acl.SetGroup( (New-Object System.Security.Principal.NTAccount($xml.AccessControlList.Group)) )
+	}
 	ForEach ($ace in ($xml.AccessControlList.AccessControlEntry |`
 				Where-Object IsInherited -eq $false)) {
 		$ID = New-Object System.Security.Principal.NTAccount($ace.IdentityReference)
@@ -167,7 +205,7 @@ function XMLtoACL {
 }
 
 
-<#     >>>>>-----     XMLtoICACLS function     -----<<<<<
+<#			>>>>>-----		XMLtoICACLS function     -----<<<<<
 #>
 function XMLtoICACLS {
 	Param(
@@ -175,7 +213,10 @@ function XMLtoICACLS {
 			[System.Xml.XmlElement]$xml
 	)
 	Write-Debug $xml
-	$acl = @("/reset /Q", "/setowner `"$($xml.AccessControlList.Owner)`"")
+	$acl = @("/reset /Q")
+	if(-not $SkipOwner) {
+		$acl += "/setowner `"$($xml.AccessControlList.Owner)`""
+	}
 	$ACEs += "/inheritance:e"
 	
 	ForEach ($ace in ($xml.AccessControlList.AccessControlEntry |`
@@ -225,7 +266,7 @@ function XMLtoICACLS {
 }
 
 
-<#     >>>>>-----     Check-XML function     -----<<<<<
+<#			>>>>>-----		Check-XML function     -----<<<<<
 #>
 function Check-XML {
 	Param(
@@ -245,7 +286,7 @@ function Check-XML {
 }
 
 
-<#     >>>>>-----     Format-SideBySide function     -----<<<<<
+<#			>>>>>-----		Format-SideBySide function     -----<<<<<
 #>
 function Format-SideBySide {
 	Param(
@@ -278,7 +319,7 @@ function Format-SideBySide {
 }
 
 
-<#     >>>>>-----     Compare-ACE function     -----<<<<<
+<#			>>>>>-----		Compare-ACE function     -----<<<<<
 #>
 function Compare-ACE {
 	Param(
@@ -344,7 +385,38 @@ function Compare-ACE {
 }
 
 
-<#     >>>>>-----     EnqueueTree Script Block (function)     -----<<<<<
+<#			>>>>>-----		EnqueueSetACL function     -----<<<<<
+Test if an XML-ACL entry should be set to the file system and enqueue the
+operation if so.
+#>
+function EnqueueSetACL {
+	Param(
+		[parameter(Mandatory=$true, Position=0)]
+			[System.Xml.XmlElement]$xml
+	)
+	Write-Debug $xml
+	
+	$Job = XMLtoACL $xml
+	Write-Output "Processing $($Job.Path)"
+	try {
+		$rawACEs = (Get-ACL -LiteralPath $Job.Path).Access | `
+					Where-Object {$_.IsInherited -eq $false}
+	} catch [System.UnauthorizedAccessException] {
+		throw "Unable to Access raw ACL at $($Job.Path). File/Folder access denied"
+	}
+	$Result = Compare-ACE $Job.ACL.Access $rawACEs -Diff
+	if($icacls) {$Job = XMLtoICACLS $xml}
+	if($Result[-1] -eq $false){
+		$aclQueue.Enqueue($Job)
+		Write-Verbose "Differences between config file and raw ACL (Left = file Right = raw):"
+		$Result[0..($Result.Count-2)] | Out-String -stream | Write-Verbose
+	} elseif($WriteAll) {
+		$aclQueue.Enqueue($Job)
+	}
+}
+
+
+<#			>>>>>-----		EnqueueTree Script Block (function)     -----<<<<<
 #>
 $EnqueueTree = {
 	Param (
@@ -380,7 +452,7 @@ $EnqueueTree = {
 }
 
 
-<#     >>>>>-----     SetACL Script Block (function)     -----<<<<<
+<#			>>>>>-----		SetACL Script Block (function)     -----<<<<<
 #>
 $SetACL = {
 	Param(
@@ -390,13 +462,13 @@ $SetACL = {
 			[bool]$Replace = $false
 	)
 	Write-Output "`r`n`r`nLog for Worker $Index`:"
+	
 	# below statement prevents "[ref] cannot be applied to a variable that doesn't exist"
 	$Job = $null
 	do{
 		if($aclQueue.TryDequeue([ref]$Job)) {
 			$Idle[$Index] = $false
-			Write-Output "`r`nStarting Job: $($Job.Path)"
-			Write-Output "logic check: $($Job.icacls -eq $null)"
+			Write-Output "`r`n$(Get-Date -Format mm:ss.ffff)Starting Job: $($Job.Path)"
 			if($Job.ACL -ne $null) {
 				Set-ACL -LiteralPath $Job.Path -AclObject $Job.ACL | Write-Output
 				if(-not $?) {
@@ -422,39 +494,46 @@ $SetACL = {
 }
 
 
+<#			>>>>>-----		Main Logic (Switch)     -----<<<<<
+Controls what code runs based on what allowed verb is provided.
+#>
 Switch ([string]$Verb){
-	<#   >>>---   Parameter Validation and Initialization   ---<<<
+	<#			>>>---   Parameter Validation and Initialization   ---<<<
 	#>
 	{'save','set','compare','check','update' -contains $_} {
 		Write-Debug "Validating Parameters"
-		Write-Debug "Config File: $File"
-		Write-Debug "Working Path: $Path"
+		Write-Debug "Config File in: $File"
+		Write-Debug "Working Path in: $Path"
+		
 		# validate config file path
-		if(($Verb -eq 'save') -and (Test-Path -LiteralPath $File)) {
-			throw "File already exists or is a directory. Please use 'update'."
-		} elseif( (-not (Test-Path -LiteralPath $File) -and ($Verb -ne 'save')) ) {
-			throw "Configuration file not found"
-		} elseif(Test-Path -LiteralPath $File -PathType Container) {
+		if(Test-Path -LiteralPath $File -PathType Container) {
 			throw "File path provided refers to a directory."
-		} elseif( -not [System.IO.Path]::IsPathRooted($File)) {
-			$File = [System.IO.Path]::GetFullPath((Join-Path (Get-Location | Convert-Path) $File))
+		} elseif(($Verb -eq 'save') -and (Test-Path -LiteralPath $File)) {
+			throw "File already exists. Please use 'update'."
+		} elseif( ($Verb -ne 'save') -and (-not (Test-Path -LiteralPath $File)) ) {
+			throw "Configuration file not found"
+		} elseif(-not [System.IO.Path]::IsPathRooted($File)) {
+			$File = Get-RootedPath $File
 		}
-		if( -not $File.Contains('\\?\')) {
+		if(-not $File.Contains('\\?\')) {		# Correct Path for long paths
 			$File = "\\?\" + ($File -replace "^\\\\", "UNC\")
 		}
+		Write-Debug "Config File out: $File"
 		
-		if ($null,'',$false,'False' -contains $Path) {
+		if($Path -in $null,'',$false,'False') {
 			$Path = (get-item -LiteralPath (Get-Location)).PSpath
 		}
 		if(Test-Path -LiteralPath $Path -PathType Container) {
 			$Path = Convert-Path -LiteralPath $Path
 		} else {throw "Invalid path provided: $Path :: $((get-item -LiteralPath (Get-Location)).PSpath)"}
-		# Correct Path for long paths
-		if( -not $Path.Contains('\\?\')) {
+		
+		if( -not $Path.Contains('\\?\')) {		# Correct Path for long paths
 			$Path = "\\?\" + ($Path -replace "^\\\\", "UNC\")
 		}
-		#Return $File, $Path
+		Write-Debug "Working Path out: $Path"
 	}
+
+
 	<#			>>>---   Load config file   ---<<<
 	#>
 	{'set','compare','check','update' -contains $_} {
@@ -467,7 +546,7 @@ Switch ([string]$Verb){
 		
 		# Pull path from config file
 		$Path = $xmlRead.rootpath.path
-	}	{'save','update' -contains $_} {		#---IF save or update---<<<
+	}	{'save','update' -contains $_} {		#---   IF save or update   ---<<<
 		if($verb -eq 'update') {
 			Write-Debug "Backing up old config file"
 			Remove-Variable xmlRead
@@ -489,8 +568,11 @@ Switch ([string]$Verb){
 			throw "Unable to write to provided file path."
 		}
 	}
+
+
 	<#			>>>---   Check config file   ---<<<
-	check for invalid security principles
+	Check for invalid security principles.
+	This should be expanded on to check more aspects of the config file.
 	#>
 	{'set','compare','check' -contains $_} {
 		Write-Debug "Checking config file security principles"
@@ -506,10 +588,16 @@ Switch ([string]$Verb){
 			}
 		}
 	}
+
+
 	<#			>>>---   Multiple Thread Setup   ---<<<
+	Setup shared variables for managing worker threads and passing data between
+	threads.  Add variables to an initial session state templete.  Create and
+	open RunSpacePool.
 	#>
 	{'save','update','set' -contains $_} {
 		Write-Debug "Setting up RunspacePool"
+		
 		# create shared variables used to coordinate worker processes
 		$PathQueue = New-Object System.Collections.Concurrent.ConcurrentQueue[psobject]
 		$aclQueue = New-Object System.Collections.Concurrent.ConcurrentQueue[psobject]
@@ -531,13 +619,15 @@ Switch ([string]$Verb){
 			-ArgumentList 'Idle',$Idle,$Null)
 		)
 		
-		# Create the runspacepool using the defined sessionstate variable
+		# Create the RunSpacePool using the defined sessionstate variable
 		$RunspacePool = [runspacefactory]::CreateRunspacePool($InitialSessionState)
 		if (-not $RunspacePool.SetMaxRunspaces($MaxThread) ) {
 				throw "Failed to set max run spaces."
 		}
 		$RunspacePool.Open()
 	}
+
+
 	<#			>>>---   Compare config file with file/folder ACLs    ---<<<
 	#>
 	'compare' {
@@ -578,6 +668,8 @@ Switch ([string]$Verb){
 		}
 		Write-Output "" "Files and folders NOT listed in the config file were NOT checked for explicite ACEs"
 	}
+
+
 	<#			>>>---   Save/Update config file from file/folder ACLs   ---<<<
 	#>
 	{'save','update' -contains $_} {
@@ -613,11 +705,12 @@ Switch ([string]$Verb){
 		
 		do{		# Write ACL to XML file if there are ACLs queued
 			if($aclQueue.TryDequeue([ref]$aclHold)) {
+				$Idle[0] = $false
 				ACLtoXML $aclHold.ACL $xmlWriter $aclHold.IsFolder -SaveAll $SaveAll
 				Write-output "$(get-date -Format HH:mm:ss) - Errors above, ACL processed: " `
 							($aclHold.ACL.Path -split '::')[1]
 			} else {		# wait half a second before checking ACL queue again
-				$Idle[0] = $True
+				$Idle[0] = $true
 				Start-Sleep -Milliseconds 500
 			}
 		} While (($Workers.Handle.IsCompleted -contains $False) -or ($aclQueue.count -gt 0))
@@ -629,6 +722,8 @@ Switch ([string]$Verb){
 		$xmlWriter.Close()
 		$xmlWriter.Dispose()
 	}
+
+
 	<#			>>>---   Set file/folder ACLs from config file   ---<<<
 	#>
 	'set' {
@@ -638,33 +733,20 @@ Switch ([string]$Verb){
 		Write-Debug "Setting ACLs from config file: $File"
 		
 		# for multi threading control
-		$TotalPaths = $xmlRead.RootPath.SubPath.Path.count +1
+		$TotalPaths = $xmlRead.RootPath.SubPath.Path.count + 1		# for write-progress; if it get implemented
 		$TreeDepth = [regex]::Matches($xmlRead.RootPath.Path, "\\").count
-		if($xmlRead.RootPath.SubPath[-1] -eq $null){
-			$MaxDepth = [regex]::Matches( `
-					($xmlRead.RootPath.SubPath | Sort-Object -Property {$_.Path.Length}).Path, "\\").count
-		} else {
-			$MaxDepth = [regex]::Matches( `
-					($xmlRead.RootPath.SubPath | Sort-Object -Property {$_.Path.Length})[-1].Path, "\\").count
+		$MaxDepth = 0
+		foreach($SubPath in $xmlRead.RootPath.SubPath) {
+			$Depth = [regex]::Matches(($SubPath.Path -replace "\\$",""), "\\").count
+			if($Depth -gt $MaxDepth) {$MaxDepth = $Depth}
 		}
 		
-		$Job = XMLtoACL $xmlRead.RootPath
-		Write-Output "Processing $($Job.Path)"
-		try {
-			$rawACEs = (Get-ACL -LiteralPath $Job.Path).Access | `
-						Where-Object {$_.IsInherited -eq $false}
-		} catch [System.UnauthorizedAccessException] {
-			throw "Unable to Access raw ACL at $($Job.Path). File/Folder access denied"
+		if($TakeOwn) {
+			Write-Output "Taking Ownership of all files in $($xmlRead.RootPath.Path)"
+			takeown /f $xmlRead.RootPath.Path /r /d Y | Write-Verbose
 		}
-		$Result = Compare-ACE $Job.ACL.Access $rawACEs -Diff
-		if($icacls) {$Job = XMLtoICACLS $xmlRead.RootPath}
-		if($Result[-1] -eq $false){
-			$aclQueue.Enqueue($Job)
-			Write-Verbose "Differences between config file and raw ACL (Left = file Right = raw):"
-			$Result[0..($Result.Count-2)] | Out-String -stream | Write-Verbose
-		} elseif($WriteAll) {
-			$aclQueue.Enqueue($Job)
-		}
+		
+		EnqueueSetACL $xmlRead.RootPath
 		
 		$Workers = @()
 		for ($i=0; $i -lt $MaxThread; $i++){
@@ -677,40 +759,30 @@ Switch ([string]$Verb){
 			Start-Sleep -Milliseconds 100
 		}
 		
+		do{		# Write-progress statements would go here
+			Start-Sleep -Seconds 1
+		}while(($Idle[1..$MaxThread] -contains $false) -or ($aclQueue.count -gt 0))
+		
 		# multi thread logic mostly here
 		Write-Debug "Tree depth: $TreeDepth `r`nMax depth: $MaxDepth"
 		for($i=$TreeDepth; $i -lt $MaxDepth+1; $i++) {
 			Write-Debug "Folder Depth: $i"
 			$PathsInLayer = 0
 			ForEach ($subpath in $xmlRead.RootPath.SubPath) {
-				if([regex]::Matches($subpath.Path, "\\").count -eq $i) {
-					$PathsInLayer++
-					$Job = XMLtoACL $subpath
-					Write-Output "Processing $($Job.Path)"
-					try {
-						$rawACEs = (Get-ACL -LiteralPath $Job.Path).Access | `
-									Where-Object {$_.IsInherited -eq $false}
-					} catch [System.UnauthorizedAccessException] {
-						throw "Unable to Access raw ACL at $($Job.Path). File/Folder access denied"
-					}
-					$Result = Compare-ACE $Job.ACL.Access $rawACEs -Diff
-					if($icacls) {$Job = XMLtoICACLS $subpath}
-					if($Result[-1] -eq $false){
-						$aclQueue.Enqueue($Job)
-						Write-Verbose "Differences between config file and raw ACL (Left = file Right = raw):"
-						$Result[0..($Result.Count-2)] | Out-String -stream | Write-Verbose
-					} elseif($WriteAll) {
-						$aclQueue.Enqueue($Job)
-					}
+				if([regex]::Matches(($subpath.Path -replace "\\$",""), "\\").count -eq $i) {
+					$PathsInLayer++		# for write-progress; if it get implemented
+					EnqueueSetACL $subpath
 				}
 			}
 			Write-Debug "Paths at folder depth: $PathsInLayer"
-			do{
-				Start-Sleep -Seconds 5
+			do{		# Write-progress statements would go here
+				Start-Sleep -Seconds 1
 			}while(($Idle[1..$MaxThread] -contains $false) -or ($aclQueue.count -gt 0))
 		}
 		$Idle[0] = $True
 	}
+
+
 	<#			>>>---   Cleanup Multiple Thread setup   ---<<<
 	#>
 	{'save','update','set' -contains $_} {
@@ -724,6 +796,8 @@ Switch ([string]$Verb){
 		$RunspacePool.Dispose()
 		$RunspacePool.Close() 
 	}
+
+
 	default {
 		Write-Output $HelpMSG
 	}
